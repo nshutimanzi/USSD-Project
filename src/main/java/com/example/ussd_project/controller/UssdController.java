@@ -3,12 +3,15 @@ package com.example.ussd_project.controller;
 import com.example.ussd_project.model.Customer;
 import com.example.ussd_project.service.CustomerService;
 import com.example.ussd_project.service.TransactionService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("/ussd")
@@ -16,7 +19,9 @@ public class UssdController {
 
     private final CustomerService customerService;
     private final TransactionService transactionService;
-    private final Map<String, Map<String, String>> sessionCache = new HashMap<>();
+
+    @Autowired
+    private RedisTemplate<String, Map<String, String>> redisTemplate;
 
     public UssdController(CustomerService customerService, TransactionService transactionService) {
         this.customerService = customerService;
@@ -35,7 +40,12 @@ public class UssdController {
 
     @PostMapping("/process")
     public String processUssdInput(@RequestParam String phoneNumber, @RequestParam String input) {
-        Map<String, String> sessionData = sessionCache.getOrDefault(phoneNumber, new HashMap<>());
+        String redisKey = "session:" + phoneNumber;
+        Map<String, String> sessionData = redisTemplate.opsForValue().get(redisKey);
+
+        if (sessionData == null) {
+            sessionData = new HashMap<>();
+        }
 
         if (sessionData.containsKey("sendMoneyStage")) {
             return handleSendMoneyFlow(phoneNumber, input, sessionData);
@@ -56,51 +66,46 @@ public class UssdController {
     }
 
     private String getMainMenu() {
-        return """
-               Main Menu
-               ---------
-               1. Send Money
-               2. Display Balance
-               3. Display Profile
-               """;
+        return "Main Menu\n----------\n1. Send Money\n2. Display Balance\n3. Display Profile ";
     }
 
     private String handleSendMoney(String phoneNumber) {
+        String redisKey = "session:" + phoneNumber;
         Map<String, String> sessionData = new HashMap<>();
         sessionData.put("sendMoneyStage", "bankSelection");
-        sessionCache.put(phoneNumber, sessionData);
+
+        redisTemplate.opsForValue().set(redisKey, sessionData, 1, TimeUnit.MINUTES);
+
         return "Choose bank:\n1. I&M Bank\n2. Equity Bank\n3. BK";
     }
 
     private String handleSendMoneyFlow(String phoneNumber, String input, Map<String, String> sessionData) {
+        String redisKey = "session:" + phoneNumber;
         String stage = sessionData.get("sendMoneyStage");
 
         switch (stage) {
             case "bankSelection":
                 return handleBankSelection(phoneNumber, input, sessionData);
-
             case "receiverPhoneNumber":
                 sessionData.put("receiverPhoneNumber", input);
                 sessionData.put("sendMoneyStage", "amount");
-                sessionCache.put(phoneNumber, sessionData);
+                redisTemplate.opsForValue().set(redisKey, sessionData, 1, TimeUnit.MINUTES);
                 return "Enter amount:";
-
             case "amount":
                 sessionData.put("amount", input);
                 sessionData.put("sendMoneyStage", "pin");
-                sessionCache.put(phoneNumber, sessionData);
+                redisTemplate.opsForValue().set(redisKey, sessionData, 1, TimeUnit.MINUTES);
                 return "Type PIN:";
-
             case "pin":
                 sessionData.put("pin", input);
                 return completeTransaction(phoneNumber, sessionData);
-
             default:
                 return "Invalid flow stage.";
         }
     }
 
     private String handleBankSelection(String phoneNumber, String input, Map<String, String> sessionData) {
+        String redisKey = "session:" + phoneNumber;
         String bankName = getBankName(input);
 
         if (bankName == null) {
@@ -109,11 +114,12 @@ public class UssdController {
 
         sessionData.put("bank", bankName);
         sessionData.put("sendMoneyStage", "receiverPhoneNumber");
-        sessionCache.put(phoneNumber, sessionData);
+        redisTemplate.opsForValue().set(redisKey, sessionData, 1, TimeUnit.MINUTES);
         return "Enter receiver's phone number:";
     }
 
     private String completeTransaction(String phoneNumber, Map<String, String> sessionData) {
+        String redisKey = "session:" + phoneNumber;
         String receiverPhoneNumber = sessionData.get("receiverPhoneNumber");
         String bankName = sessionData.get("bank");
         BigDecimal amount = new BigDecimal(sessionData.get("amount"));
@@ -121,7 +127,7 @@ public class UssdController {
 
         try {
             transactionService.transferMoney(phoneNumber, receiverPhoneNumber, amount, bankName, pin);
-            sessionCache.remove(phoneNumber);
+            redisTemplate.delete(redisKey);
             return "Money sent successfully. \n\n Type 0 to go back to Main menu";
         } catch (Exception e) {
             return "Transaction failed: " + e.getMessage();
