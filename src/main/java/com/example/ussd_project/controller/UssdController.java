@@ -1,8 +1,10 @@
 package com.example.ussd_project.controller;
 
 import com.example.ussd_project.model.Customer;
+import com.example.ussd_project.model.UssdMenu;
 import com.example.ussd_project.service.CustomerService;
 import com.example.ussd_project.service.TransactionService;
+import com.example.ussd_project.service.UssdMenuService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.ResponseEntity;
@@ -10,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -19,13 +22,15 @@ public class UssdController {
 
     private final CustomerService customerService;
     private final TransactionService transactionService;
+    private final UssdMenuService ussdMenuService;
 
     @Autowired
     private RedisTemplate<String, Map<String, String>> redisTemplate;
 
-    public UssdController(CustomerService customerService, TransactionService transactionService) {
+    public UssdController(CustomerService customerService, TransactionService transactionService, UssdMenuService ussdMenuService) {
         this.customerService = customerService;
         this.transactionService = transactionService;
+        this.ussdMenuService = ussdMenuService;
     }
 
     @PostMapping("/register")
@@ -51,22 +56,29 @@ public class UssdController {
             return handleSendMoneyFlow(phoneNumber, input, sessionData);
         }
 
-        switch (input) {
-            case "1":
-                return handleSendMoney(phoneNumber);
-            case "2":
-                return handleCheckBalance(phoneNumber);
-            case "3":
-                return handleViewProfile(phoneNumber);
-            case "0":
-                return getMainMenu();
-            default:
-                return "Invalid option. Please select a valid menu option.";
-        }
-    }
+        List<UssdMenu> menuOptions = ussdMenuService.getMenuOptions("main");
+        String menu = ussdMenuService.buildMenu(menuOptions);
 
-    private String getMainMenu() {
-        return "Main Menu\n----------\n1. Send Money\n2. Display Balance\n3. Display Profile ";
+        if (input.equals("0")){
+            return menu;
+        }
+
+        UssdMenu selectedMenu = menuOptions.stream().filter(m -> m.getMenuOption().equals(input)).findFirst().orElse(null);
+
+        if (selectedMenu != null){
+            switch (selectedMenu.getAction()){
+                case "sendMoney":
+                    return handleSendMoney(phoneNumber);
+                case "checkBalance":
+                    return handleCheckBalance(phoneNumber);
+                case "viewProfile":
+                    return handleViewProfile(phoneNumber);
+                default:
+                    return "Invalid menu option.";
+            }
+        } else {
+            return "Invalid option. Please select a valid menu option.";
+        }
     }
 
     private String handleSendMoney(String phoneNumber) {
@@ -136,10 +148,14 @@ public class UssdController {
 
     private String getBankName(String option) {
         switch (option) {
-            case "1": return "I&M Bank";
-            case "2": return "Equity Bank";
-            case "3": return "Bank of Kigali";
-            default: return null;
+            case "1":
+                return "I&M Bank";
+            case "2":
+                return "Equity Bank";
+            case "3":
+                return "Bank of Kigali";
+            default:
+                return null;
         }
     }
 
